@@ -1,0 +1,13 @@
+services:
+  kufar-bot:
+    build: .
+    image: kufar-bot:local
+    container_name: kufar-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: Europe/Minsk
+    volumes:
+      - ./data:/app/data
+    working_dir: /app

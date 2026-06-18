@@ -1,0 +1,14 @@
+# Готовый образ из GitHub Container Registry (без сборки на сервере).
+# Замените YOUR_GITHUB_USER на владельца репозитория.
+services:
+  kufar-bot:
+    image: ghcr.io/YOUR_GITHUB_USER/kufar-bot:latest
+    container_name: kufar-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: Europe/Minsk
+    volumes:
+      - ./data:/app/data
+    working_dir: /app
