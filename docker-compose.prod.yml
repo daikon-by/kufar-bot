@@ -1,10 +1,11 @@
 # Готовый образ из GitHub Container Registry (без сборки на сервере).
-# Замените YOUR_GITHUB_USER на владельца репозитория.
+# Образ задаётся в .env: KUFAR_BOT_IMAGE=ghcr.io/<user>/kufar-bot:latest
 services:
   kufar-bot:
-    image: ghcr.io/YOUR_GITHUB_USER/kufar-bot:latest
+    image: ${KUFAR_BOT_IMAGE:?Задайте KUFAR_BOT_IMAGE в .env}
     container_name: kufar-bot
     restart: unless-stopped
+    pull_policy: always
     env_file:
       - .env
     environment:

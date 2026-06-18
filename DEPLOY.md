@@ -75,20 +75,70 @@ mkdir -p data
 podman compose up -d --build
 ```
 
-### Вариант B — готовый образ с GitHub (быстрее)
+### Вариант B — готовый образ с GitHub (рекомендуется для продакшена)
 
 ```bash
+git clone https://github.com/<user>/kufar-bot.git /opt/kufar-bot
 cd /opt/kufar-bot
-# только .env и data, без клонирования всего репо:
-curl -fsSL -o docker-compose.prod.yml \
-  https://raw.githubusercontent.com/<user>/kufar-bot/main/docker-compose.prod.yml
-sed -i 's/YOUR_GITHUB_USER/<user>/' docker-compose.prod.yml
+chmod +x scripts/*.sh
+./scripts/install.sh <user>    # создаст .env с правильным KUFAR_BOT_IMAGE
+nano .env                      # BOT_TOKEN, ADMIN_IDS
 
 # если образ приватный:
 # echo "YOUR_GITHUB_PAT" | podman login ghcr.io -u <user> --password-stdin
 
-podman compose -f docker-compose.prod.yml pull
-podman compose -f docker-compose.prod.yml up -d
+./scripts/update.sh
+```
+
+---
+
+## Быстрое обновление (основной сценарий)
+
+После каждого `git push` в `main` GitHub Actions публикует новый образ `ghcr.io/<user>/kufar-bot:latest`.
+
+### На сервере — одна команда
+
+```bash
+cd /opt/kufar-bot
+./scripts/update.sh
+```
+
+Скрипт делает `pull` свежего образа и пересоздаёт контейнер. База и настройки в `./data` не трогаются.
+
+### С вашего ПК — без входа на сервер вручную
+
+```bash
+cd /path/to/kufar-bot
+git push origin main
+# дождаться зелёной галочки в GitHub Actions (~2–3 мин)
+SERVER=user@your-server REMOTE_DIR=/opt/kufar-bot ./scripts/remote-update.sh
+```
+
+Или через Makefile:
+
+```bash
+make release                              # тесты + push
+make remote-update SERVER=user@your-server  # накат на сервер
+```
+
+### Откат на предыдущую версию
+
+В GitHub Actions у каждой сборки есть тег по git-sha. Откат:
+
+```bash
+./scripts/update.sh abc1234    # короткий sha коммита
+# или
+./scripts/update.sh v0.1.0     # если ставили git-тег
+```
+
+Список тегов образа: GitHub → Packages → kufar-bot.
+
+### Обновление без образа (сборка на сервере)
+
+Если `KUFAR_BOT_IMAGE` не задан в `.env`:
+
+```bash
+./scripts/update.sh   # git pull + podman compose up -d --build
 ```
 
 ---
@@ -119,11 +169,10 @@ podman compose logs -f kufar-bot
 podman compose ps
 
 # перезапуск после смены .env
-podman compose up -d --force-recreate
+podman compose -f docker-compose.prod.yml up -d --force-recreate
 
-# обновление (вариант B)
-podman compose -f docker-compose.prod.yml pull
-podman compose -f docker-compose.prod.yml up -d
+# быстрое обновление (предпочтительно)
+./scripts/update.sh
 
 # остановка
 podman compose down

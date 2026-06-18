@@ -13,6 +13,20 @@ podman compose up -d --build
 
 Подробный деплой на сервер: [DEPLOY.md](DEPLOY.md).
 
+## Быстрое обновление на сервере
+
+```bash
+# 1. На ПК: пушим код → GitHub Actions собирает образ
+git push origin main
+
+# 2. На сервере (или с ПК одной командой):
+./scripts/update.sh
+# с ПК:
+SERVER=user@host ./scripts/remote-update.sh
+```
+
+Конкретная версия: `./scripts/update.sh v0.1.0` или `./scripts/update.sh <git-sha>`.
+
 Локально:
 
 ```bash
