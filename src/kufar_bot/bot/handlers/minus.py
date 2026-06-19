@@ -1,5 +1,3 @@
-import html
-
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
@@ -9,11 +7,8 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from kufar_bot.bot.keyboards import (
-    main_menu,
-    minus_confirm_keyboard,
-    minus_menu,
-)
+from kufar_bot.bot.keyboards import minus_confirm_keyboard
+from kufar_bot.bot.minus_draft import minus_draft_payload, selection_for_phrase
 from kufar_bot.bot.minus_list_view import (
     clamp_page,
     format_minus_group_header,
@@ -122,15 +117,30 @@ async def minus_from_listing_input(message: Message, state: FSMContext, db_user:
 
     data = await state.get_data()
     group_id = data.get("group_id")
+    words: list[str] = data.get("title_words") or []
+    suggestions: list[str] = data.get("suggestions") or []
+    subject = data.get("listing_subject") or ""
+    selected = selection_for_phrase(words, phrase)
+
     async with async_session_factory() as session:
         scope = await minus_scope_label(
             session, db_user.telegram_id, group_id, for_action=True
         )
 
-    await state.update_data(draft_phrase=phrase)
-    draft_text = (
-        f"Сохранить {scope}:\n<code>{html.escape(phrase)}</code>\n\n"
-        "Нажмите «Сохранить» или «К объявлению»."
+    manual = not selected
+    await state.update_data(
+        draft_phrase=phrase,
+        selected_word_indices=selected,
+        draft_manual=manual,
+    )
+    draft_text, markup = minus_draft_payload(
+        scope,
+        subject,
+        phrase,
+        words,
+        selected,
+        suggestions,
+        manual=manual,
     )
     listing_chat_id = data.get("listing_chat_id")
     ui_message_id = data.get("minus_ui_message_id") or data.get("listing_message_id")
@@ -140,7 +150,7 @@ async def minus_from_listing_input(message: Message, state: FSMContext, db_user:
             chat_id=int(listing_chat_id),
             message_id=int(ui_message_id),
             text=draft_text,
-            reply_markup=minus_confirm_keyboard(),
+            reply_markup=markup,
         )
         if edited:
             await state.update_data(minus_ui_message_id=int(ui_message_id))
@@ -160,7 +170,7 @@ async def minus_from_listing_input(message: Message, state: FSMContext, db_user:
     sent = await message.answer(
         draft_text,
         parse_mode="HTML",
-        reply_markup=minus_confirm_keyboard(),
+        reply_markup=markup,
         reply_to_message_id=ui_message_id,
     )
     await state.update_data(minus_ui_message_id=sent.message_id)
