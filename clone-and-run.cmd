@@ -1,5 +1,4 @@
 @echo off
-rem Запуск из любой папки: клонирует в C:\kufar-bot и вызывает setup-windows.cmd
 set "TARGET=%~1"
 if "%TARGET%"=="" set "TARGET=C:\kufar-bot"
 set "REPO=https://github.com/daikon-by/kufar-bot.git"
