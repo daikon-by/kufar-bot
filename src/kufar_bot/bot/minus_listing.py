@@ -27,24 +27,36 @@ async def restore_listing_message(
     ad_id: int,
     group_id: int,
 ) -> bool:
-    try:
-        await bot.edit_message_text(
+    markup = listing_keyboard(ad_id, group_id)
+    for edit in (
+        lambda: bot.edit_message_caption(
+            chat_id=chat_id,
+            message_id=message_id,
+            caption=text,
+            reply_markup=markup,
+            parse_mode="HTML",
+        ),
+        lambda: bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
             text=text,
-            reply_markup=listing_keyboard(ad_id, group_id),
+            reply_markup=markup,
             parse_mode="HTML",
             disable_web_page_preview=True,
-        )
-        return True
-    except TelegramBadRequest as exc:
-        log.warning(
-            "listing_restore_failed",
-            chat_id=chat_id,
-            message_id=message_id,
-            error=str(exc),
-        )
-        return False
+        ),
+    ):
+        try:
+            await edit()
+            return True
+        except TelegramBadRequest as exc:
+            last_error = exc
+    log.warning(
+        "listing_restore_failed",
+        chat_id=chat_id,
+        message_id=message_id,
+        error=str(last_error),
+    )
+    return False
 
 
 async def edit_listing_message(
@@ -69,24 +81,35 @@ async def edit_listing_message_by_id(
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> bool:
-    try:
-        await bot.edit_message_text(
+    for edit in (
+        lambda: bot.edit_message_caption(
+            chat_id=chat_id,
+            message_id=message_id,
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        ),
+        lambda: bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
             text=text,
             reply_markup=reply_markup,
             parse_mode="HTML",
             disable_web_page_preview=True,
-        )
-        return True
-    except TelegramBadRequest as exc:
-        log.warning(
-            "listing_edit_failed",
-            chat_id=chat_id,
-            message_id=message_id,
-            error=str(exc),
-        )
-        return False
+        ),
+    ):
+        try:
+            await edit()
+            return True
+        except TelegramBadRequest as exc:
+            last_error = exc
+    log.warning(
+        "listing_edit_failed",
+        chat_id=chat_id,
+        message_id=message_id,
+        error=str(last_error),
+    )
+    return False
 
 
 async def delete_message_safe(bot: Bot, *, chat_id: int, message_id: int) -> None:

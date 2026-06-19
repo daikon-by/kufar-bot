@@ -35,26 +35,6 @@ def listing_keyboard(ad_id: int, group_id: int) -> InlineKeyboardMarkup:
     )
 
 
-async def _attach_keyboard(
-    bot: Bot,
-    *,
-    chat_id: int,
-    message_id: int,
-    keyboard: InlineKeyboardMarkup,
-) -> None:
-    try:
-        await with_flood_retry(
-            "listing_keyboard",
-            lambda: bot.edit_message_reply_markup(
-                chat_id=chat_id,
-                message_id=message_id,
-                reply_markup=keyboard,
-            ),
-        )
-    except Exception:
-        log.warning("listing_keyboard_attach_failed", chat_id=chat_id, message_id=message_id)
-
-
 async def send_listing(
     bot: Bot,
     chat_id: int,
@@ -64,14 +44,19 @@ async def send_listing(
     client: KufarClient | None = None,
     section_label: str | None = None,
 ) -> bool:
-    """Отправляет лот одним сообщением: фото с подписью или альбом с галереей."""
+    """Отправляет лот: текст+кнопки, для одного фото — с подписью, для нескольких — галерея и текст."""
     if client is not None and settings.kufar_fetch_description:
         listing = await client.enrich_with_description(listing)
         if settings.kufar_request_delay_sec > 0:
             await asyncio.sleep(settings.kufar_request_delay_sec)
 
     photo_urls = listing.display_photo_urls
-    text_limit = TELEGRAM_CAPTION_LIMIT if photo_urls else TELEGRAM_MESSAGE_LIMIT
+    if not photo_urls:
+        text_limit = TELEGRAM_MESSAGE_LIMIT
+    elif len(photo_urls) == 1:
+        text_limit = TELEGRAM_CAPTION_LIMIT
+    else:
+        text_limit = TELEGRAM_MESSAGE_LIMIT
     text = format_listing_message(
         listing,
         group.name,
@@ -106,23 +91,21 @@ async def send_listing(
                 ),
             )
         else:
-            media = [
-                InputMediaPhoto(
-                    media=url,
-                    caption=text if idx == 0 else None,
-                    parse_mode="HTML",
-                )
-                for idx, url in enumerate(photo_urls)
-            ]
+            media = [InputMediaPhoto(media=url) for url in photo_urls]
             messages = await with_flood_retry(
                 "send_media_group",
                 lambda: bot.send_media_group(chat_id=chat_id, media=media),
             )
-            await _attach_keyboard(
-                bot,
-                chat_id=chat_id,
-                message_id=messages[-1].message_id,
-                keyboard=keyboard,
+            await with_flood_retry(
+                "send_listing_text",
+                lambda: bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=keyboard,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                    reply_to_message_id=messages[0].message_id,
+                ),
             )
     except Exception:
         log.exception(
