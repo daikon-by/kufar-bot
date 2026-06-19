@@ -7,7 +7,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from kufar_bot.bot.keyboards import minus_confirm_keyboard
+from kufar_bot.bot.keyboards import main_menu, minus_confirm_keyboard, minus_menu
 from kufar_bot.bot.minus_draft import minus_draft_payload, selection_for_phrase
 from kufar_bot.bot.minus_list_view import (
     clamp_page,

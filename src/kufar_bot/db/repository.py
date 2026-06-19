@@ -37,15 +37,18 @@ async def ensure_admins(session: AsyncSession) -> None:
     await session.commit()
 
 
-async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None) -> User:
+async def get_or_create_user(
+    session: AsyncSession, telegram_id: int, username: str | None
+) -> tuple[User, bool]:
     user = await session.get(User, telegram_id)
     if user is None:
         user = User(telegram_id=telegram_id, username=username)
         session.add(user)
         await session.flush()
-    elif username and user.username != username:
+        return user, True
+    if username and user.username != username:
         user.username = username
-    return user
+    return user, False
 
 
 def user_has_access(user: User) -> bool:

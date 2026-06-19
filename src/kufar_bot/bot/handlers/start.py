@@ -151,6 +151,7 @@ async def cmd_help(message: Message, db_user: User) -> None:
     if db_user.is_admin:
         text += (
             "\n\nАдмин:\n"
+            "👥 Пользователи — доступ и список\n"
             "/allow <id> [дней] — выдать доступ\n"
             "/revoke <id> — отозвать доступ\n"
             "/users — список пользователей"

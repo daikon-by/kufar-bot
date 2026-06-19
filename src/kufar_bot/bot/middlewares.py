@@ -4,6 +4,7 @@ from typing import Any
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
+from kufar_bot.bot.admin_notify import notify_admins_new_user
 from kufar_bot.config import settings
 from kufar_bot.db import repository as repo
 from kufar_bot.db.session import async_session_factory
@@ -20,10 +21,18 @@ class AuthMiddleware(BaseMiddleware):
         if user is None:
             return await handler(event, data)
 
+        bot = data.get("bot")
         async with async_session_factory() as session:
-            db_user = await repo.get_or_create_user(session, user.id, user.username)
+            db_user, created = await repo.get_or_create_user(session, user.id, user.username)
             await session.commit()
             data["db_user"] = db_user
+
+        if created and bot is not None:
+            await notify_admins_new_user(
+                bot,
+                telegram_id=user.id,
+                username=user.username,
+            )
 
         if not repo.user_has_access(db_user):
             if isinstance(event, Message) and event.text and event.text.startswith("/start"):
