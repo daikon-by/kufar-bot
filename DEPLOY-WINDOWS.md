@@ -2,6 +2,34 @@
 
 Бот работает из папки, автозапуск — через **Планировщик заданий**.
 
+## Быстрый старт (один скрипт)
+
+Нужны только **Git** и **Python** уже в PATH.
+
+```cmd
+setup-windows.cmd
+```
+
+Скрипт: `git clone` → `.venv` → `pip install -e .` → запуск бота.
+
+Другая папка: `setup-windows.cmd D:\bots\kufar-bot`
+
+## Логи (для отладки)
+
+| Файл | Что внутри |
+|------|------------|
+| `data\setup.log` | установка, git, pip |
+| `data\console.log` | вывод консоли, traceback |
+| `data\kufar_bot.log` | события бота |
+
+Собрать всё в один файл:
+
+```cmd
+collect-logs.cmd
+```
+
+→ `data\support-bundle.txt` — его и скидывай.
+
 ## Шаг 1 — скачать проект
 
 ```powershell
@@ -52,6 +80,12 @@ ADMIN_USERNAME=ваш_username
 
 ```powershell
 .\run-bot.cmd
+```
+
+Если ошибка `No module named 'PIL'` — venv старый, обновите зависимости:
+
+```powershell
+.\.venv\Scripts\pip.exe install -e .
 ```
 
 В Telegram бот должен ответить. Остановка: `Ctrl+C`.
