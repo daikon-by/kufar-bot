@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.6,<3",
     "structlog>=24.4,<25",
+    "pillow>=11.0,<12",
 ]
 
 [project.optional-dependencies]

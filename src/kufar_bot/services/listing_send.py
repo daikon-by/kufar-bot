@@ -4,11 +4,12 @@ import asyncio
 
 import structlog
 from aiogram import Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 from kufar_bot.config import settings
 from kufar_bot.kufar.client import KufarClient
 from kufar_bot.kufar.models import AdListing
+from kufar_bot.services.listing_collage import fetch_collage_bytes
 from kufar_bot.services.listing_format import TELEGRAM_CAPTION_LIMIT, TELEGRAM_MESSAGE_LIMIT, format_listing_message
 from kufar_bot.services.telegram_retry import pause_between_sends, with_flood_retry
 
@@ -44,19 +45,14 @@ async def send_listing(
     client: KufarClient | None = None,
     section_label: str | None = None,
 ) -> bool:
-    """Отправляет лот: текст+кнопки, для одного фото — с подписью, для нескольких — галерея и текст."""
+    """Отправляет лот: текст+кнопки; несколько фото — коллаж, одно фото — с подписью."""
     if client is not None and settings.kufar_fetch_description:
         listing = await client.enrich_with_description(listing)
         if settings.kufar_request_delay_sec > 0:
             await asyncio.sleep(settings.kufar_request_delay_sec)
 
     photo_urls = listing.display_photo_urls
-    if not photo_urls:
-        text_limit = TELEGRAM_MESSAGE_LIMIT
-    elif len(photo_urls) == 1:
-        text_limit = TELEGRAM_CAPTION_LIMIT
-    else:
-        text_limit = TELEGRAM_MESSAGE_LIMIT
+    text_limit = TELEGRAM_CAPTION_LIMIT if photo_urls else TELEGRAM_MESSAGE_LIMIT
     text = format_listing_message(
         listing,
         group.name,
@@ -91,22 +87,30 @@ async def send_listing(
                 ),
             )
         else:
-            media = [InputMediaPhoto(media=url) for url in photo_urls]
-            messages = await with_flood_retry(
-                "send_media_group",
-                lambda: bot.send_media_group(chat_id=chat_id, media=media),
-            )
-            await with_flood_retry(
-                "send_listing_text",
-                lambda: bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    reply_markup=keyboard,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                    reply_to_message_id=messages[0].message_id,
-                ),
-            )
+            collage_bytes = await fetch_collage_bytes(photo_urls)
+            if collage_bytes is not None:
+                photo = BufferedInputFile(collage_bytes, filename=f"{listing.ad_id}.jpg")
+                await with_flood_retry(
+                    "send_collage_photo",
+                    lambda: bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        caption=text,
+                        reply_markup=keyboard,
+                        parse_mode="HTML",
+                    ),
+                )
+            else:
+                await with_flood_retry(
+                    "send_photo_fallback",
+                    lambda: bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo_urls[0],
+                        caption=text,
+                        reply_markup=keyboard,
+                        parse_mode="HTML",
+                    ),
+                )
     except Exception:
         log.exception(
             "listing_send_failed",
