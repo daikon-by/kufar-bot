@@ -11,7 +11,7 @@ docker compose up -d --build
 podman compose up -d --build
 ```
 
-Подробный деплой на сервер: [DEPLOY.md](DEPLOY.md).
+Подробный деплой на сервер: [DEPLOY.md](DEPLOY.md) (Linux/Podman) · [DEPLOY-WINDOWS.md](DEPLOY-WINDOWS.md) (Windows + Планировщик).
 
 ## Быстрое обновление на сервере
 

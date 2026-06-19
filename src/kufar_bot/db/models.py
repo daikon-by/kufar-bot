@@ -61,6 +61,7 @@ class SearchUrl(Base):
     group_id: Mapped[int] = mapped_column(Integer, ForeignKey("search_groups.id", ondelete="CASCADE"))
     url: Mapped[str] = mapped_column(Text)
     api_query: Mapped[str] = mapped_column(Text, default="{}")
+    section_label: Mapped[str] = mapped_column(String(128), default="")
     watermark_ad_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

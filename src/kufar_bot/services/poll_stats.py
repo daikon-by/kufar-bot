@@ -9,12 +9,27 @@ class UrlPollStats:
     fetched: int = 0
     already_seen: int = 0
     minus_filtered: int = 0
+    new_found: int = 0
     sent: int = 0
     skipped_limit: int = 0
     watermark_found: bool = True
     digest_sent: bool = False
     first_run: bool = False
     error: str | None = None
+
+    @property
+    def send_mode(self) -> str:
+        if self.digest_sent:
+            return "список"
+        if self.new_found > settings_digest_threshold():
+            return "список (не завершён)"
+        return "карточки"
+
+
+def settings_digest_threshold() -> int:
+    from kufar_bot.config import settings
+
+    return settings.poll_digest_threshold
 
 
 @dataclass
@@ -67,19 +82,33 @@ class PollStats:
                 short_url = url_stats.url[:60] + "…" if len(url_stats.url) > 60 else url_stats.url
                 if url_stats.error:
                     lines.append(f"  ❌ {short_url}\n     {url_stats.error}")
+                    continue
+
+                if url_stats.first_run:
+                    anchor = "первый опрос — объявления за последние 24 ч"
+                elif url_stats.watermark_found:
+                    anchor = "якорь найден в выдаче"
                 else:
-                    anchor = "якорь ✓" if url_stats.watermark_found else "якорь ✗"
-                    mode = "список" if url_stats.digest_sent else "карточки"
-                    first = ", первый опрос" if url_stats.first_run else ""
+                    anchor = "якорь не найден — обрезка по времени последнего опроса"
+
+                first = " (первый опрос по этой ссылке)" if url_stats.first_run else ""
+                lines.append(f"  • {short_url}{first}")
+                lines.append(
+                    f"    С Kufar API: <b>{url_stats.fetched}</b>\n"
+                    f"    Уже показывали ранее: <b>{url_stats.already_seen}</b>\n"
+                    f"    Минус-слова: <b>{url_stats.minus_filtered}</b>\n"
+                    f"    Новых к отправке: <b>{url_stats.new_found}</b>\n"
+                    f"    Отправлено в Telegram: <b>{url_stats.sent}</b> ({url_stats.send_mode})\n"
+                    f"    {anchor}"
+                )
+                if url_stats.new_found > 0 and url_stats.sent == 0:
                     lines.append(
-                        f"  • {short_url}\n"
-                        f"    API: {url_stats.fetched}, видели: {url_stats.already_seen}, "
-                        f"минус: {url_stats.minus_filtered}, отправлено: {url_stats.sent} ({mode}{first}), "
-                        f"{anchor}"
+                        "    ⚠️ Новые объявления есть, но в Telegram не ушли. "
+                        "Повторите опрос или «Сбросить опрос» по ссылке."
                     )
-                    if url_stats.skipped_limit:
-                        lines.append(f"    пропущено (лимит): {url_stats.skipped_limit}")
-        lines.append(f"\n<b>Итого отправлено:</b> {self.sent}")
+                if url_stats.skipped_limit:
+                    lines.append(f"    Пропущено (лимит за запуск): {url_stats.skipped_limit}")
+        lines.append(f"\n<b>Итого отправлено в Telegram:</b> {self.sent}")
         if self.errors:
             lines.append(f"<b>Ошибки:</b> {len(self.errors)} (см. data/kufar_bot.log)")
         return "\n".join(lines)

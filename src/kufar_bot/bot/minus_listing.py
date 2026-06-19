@@ -52,14 +52,50 @@ async def edit_listing_message(
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> bool:
+    return await edit_listing_message_by_id(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        text=text,
+        reply_markup=reply_markup,
+    )
+
+
+async def edit_listing_message_by_id(
+    bot: Bot,
+    *,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> bool:
     try:
-        await message.edit_text(
-            text,
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
             reply_markup=reply_markup,
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
         return True
     except TelegramBadRequest as exc:
-        log.warning("listing_edit_failed", message_id=message.message_id, error=str(exc))
+        log.warning(
+            "listing_edit_failed",
+            chat_id=chat_id,
+            message_id=message_id,
+            error=str(exc),
+        )
         return False
+
+
+async def delete_message_safe(bot: Bot, *, chat_id: int, message_id: int) -> None:
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except TelegramBadRequest as exc:
+        log.warning(
+            "message_delete_failed",
+            chat_id=chat_id,
+            message_id=message_id,
+            error=str(exc),
+        )

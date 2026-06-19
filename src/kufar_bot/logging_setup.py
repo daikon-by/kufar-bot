@@ -13,7 +13,20 @@ LOG_DIR = Path("data")
 LOG_FILE = LOG_DIR / "kufar_bot.log"
 
 
+def _configure_stdio_utf8() -> None:
+    """Windows console (cp1251) cannot print emoji in log lines without UTF-8."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def setup_logging() -> None:
+    _configure_stdio_utf8()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
     LOG_DIR.mkdir(exist_ok=True)
 

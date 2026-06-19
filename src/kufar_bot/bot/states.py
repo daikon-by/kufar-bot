@@ -3,12 +3,12 @@ from aiogram.fsm.state import State, StatesGroup
 
 class AddGroupStates(StatesGroup):
     name = State()
-    section_label = State()
     region_label = State()
     urls = State()
 
 
 class AddGroupUrlStates(StatesGroup):
+    section_label = State()
     url = State()
 
 

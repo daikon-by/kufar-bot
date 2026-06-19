@@ -1,6 +1,7 @@
 import html
 
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 import structlog
 from aiogram import F, Router
@@ -8,9 +9,28 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from kufar_bot.bot.keyboards import main_menu, minus_confirm_keyboard, minus_menu, minus_phrase_actions
-from kufar_bot.bot.minus_listing import restore_listing_message
+from kufar_bot.bot.keyboards import (
+    main_menu,
+    minus_confirm_keyboard,
+    minus_menu,
+)
+from kufar_bot.bot.minus_list_view import (
+    clamp_page,
+    format_minus_group_header,
+    minus_phrases_page_keyboard,
+    parse_minus_scope_key,
+)
+from kufar_bot.bot.minus_listing import (
+    delete_message_safe,
+    edit_listing_message_by_id,
+    restore_listing_message,
+)
 from kufar_bot.bot.minus_nav import MINUS_MENU_BUTTONS
+from kufar_bot.bot.minus_scope import (
+    group_minus_phrases,
+    minus_scope_from_phrase,
+    minus_scope_label,
+)
 from kufar_bot.bot.states import AddMinusFromListingStates, AddMinusStates, EditMinusStates
 from kufar_bot.db import repository as repo
 from kufar_bot.db.models import NegativePhrase, User
@@ -102,42 +122,48 @@ async def minus_from_listing_input(message: Message, state: FSMContext, db_user:
 
     data = await state.get_data()
     group_id = data.get("group_id")
-    scope = "глобально" if group_id is None else f"для группы #{group_id}"
+    async with async_session_factory() as session:
+        scope = await minus_scope_label(
+            session, db_user.telegram_id, group_id, for_action=True
+        )
 
     await state.update_data(draft_phrase=phrase)
     draft_text = (
         f"Сохранить {scope}:\n<code>{html.escape(phrase)}</code>\n\n"
         "Нажмите «Сохранить» или «К объявлению»."
     )
-    listing_message_id = data.get("listing_message_id")
     listing_chat_id = data.get("listing_chat_id")
-    if listing_message_id and listing_chat_id:
-        try:
-            from aiogram.types import Message as TgMessage
-
-            stub = TgMessage.model_construct(
-                message_id=listing_message_id,
-                chat=message.chat.model_copy(update={"id": listing_chat_id}),
-            )
-            # edit via bot directly
-            await message.bot.edit_message_text(
-                chat_id=listing_chat_id,
-                message_id=listing_message_id,
-                text=draft_text,
-                reply_markup=minus_confirm_keyboard(),
-                parse_mode="HTML",
-                disable_web_page_preview=True,
+    ui_message_id = data.get("minus_ui_message_id") or data.get("listing_message_id")
+    if ui_message_id and listing_chat_id:
+        edited = await edit_listing_message_by_id(
+            message.bot,
+            chat_id=int(listing_chat_id),
+            message_id=int(ui_message_id),
+            text=draft_text,
+            reply_markup=minus_confirm_keyboard(),
+        )
+        if edited:
+            await state.update_data(minus_ui_message_id=int(ui_message_id))
+            await delete_message_safe(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
             )
             return
-        except Exception:
-            log.exception("minus_draft_edit_failed", user_id=db_user.telegram_id)
+        log.warning(
+            "minus_draft_edit_failed",
+            user_id=db_user.telegram_id,
+            chat_id=listing_chat_id,
+            message_id=ui_message_id,
+        )
 
-    await message.answer(
+    sent = await message.answer(
         draft_text,
         parse_mode="HTML",
         reply_markup=minus_confirm_keyboard(),
-        reply_to_message_id=listing_message_id,
+        reply_to_message_id=ui_message_id,
     )
+    await state.update_data(minus_ui_message_id=sent.message_id)
 
 
 @router.message(EditMinusStates.phrase, _NOT_MENU_BTN)
@@ -166,11 +192,39 @@ async def edit_minus_phrase(message: Message, state: FSMContext, db_user: User) 
     if item is None:
         await message.answer("Не удалось обновить фразу.", reply_markup=minus_menu())
         return
-    scope = "глобально" if item.group_id is None else f"группа #{item.group_id}"
+    scope = minus_scope_from_phrase(item)
     await message.answer(
         f"✅ Обновлено ({scope}): «{item.phrase}»",
         reply_markup=minus_menu(),
     )
+
+
+async def _send_minus_group_page(
+    target: Message,
+    phrases: list[NegativePhrase],
+    *,
+    group_id: int | None,
+    page: int = 0,
+    edit: bool = False,
+) -> None:
+    page = clamp_page(page, len(phrases))
+    text = format_minus_group_header(phrases, page=page)
+    markup = minus_phrases_page_keyboard(phrases, group_id=group_id, page=page)
+    if edit:
+        await target.edit_text(text, parse_mode="HTML", reply_markup=markup)
+    else:
+        await target.answer(text, parse_mode="HTML", reply_markup=markup)
+
+
+async def _load_scope_phrases(user_id: int, group_id: int | None) -> list[NegativePhrase]:
+    async with async_session_factory() as session:
+        result = await session.scalars(
+            select(NegativePhrase)
+            .options(joinedload(NegativePhrase.group))
+            .where(NegativePhrase.user_id == user_id)
+            .order_by(NegativePhrase.phrase)
+        )
+        return [p for p in result if p.group_id == group_id]
 
 
 @router.message(F.text == "📋 Список фраз")
@@ -178,6 +232,7 @@ async def list_minus_phrases(message: Message, db_user: User) -> None:
     async with async_session_factory() as session:
         result = await session.scalars(
             select(NegativePhrase)
+            .options(joinedload(NegativePhrase.group))
             .where(NegativePhrase.user_id == db_user.telegram_id)
             .order_by(NegativePhrase.phrase)
         )
@@ -185,12 +240,40 @@ async def list_minus_phrases(message: Message, db_user: User) -> None:
     if not phrases:
         await message.answer("Минус-фраз пока нет.", reply_markup=minus_menu())
         return
-    for item in phrases:
-        scope = "глобально" if item.group_id is None else f"группа #{item.group_id}"
-        await message.answer(
-            f"«{item.phrase}» ({scope})",
-            reply_markup=minus_phrase_actions(item.id),
+    for _, group_phrases in group_minus_phrases(phrases):
+        group_id = group_phrases[0].group_id
+        await _send_minus_group_page(message, group_phrases, group_id=group_id)
+
+
+@router.callback_query(F.data.startswith("minus:pg:"))
+async def minus_phrases_page(callback: CallbackQuery, db_user: User) -> None:
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer()
+        return
+    scope_key = parts[2]
+    page = int(parts[3])
+    group_id = parse_minus_scope_key(scope_key)
+    phrases = await _load_scope_phrases(db_user.telegram_id, group_id)
+    if not phrases:
+        if callback.message is not None:
+            await callback.message.edit_text("Минус-фраз в этом разделе нет.")
+        await callback.answer()
+        return
+    if callback.message is not None:
+        await _send_minus_group_page(
+            callback.message,
+            phrases,
+            group_id=group_id,
+            page=page,
+            edit=True,
         )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "minus:noop")
+async def minus_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("minus:edit:"))
@@ -204,7 +287,7 @@ async def edit_minus_start(callback: CallbackQuery, state: FSMContext, db_user: 
 
     await state.set_state(EditMinusStates.phrase)
     await state.update_data(phrase_id=phrase_id)
-    scope = "глобально" if item.group_id is None else f"группа #{item.group_id}"
+    scope = minus_scope_from_phrase(item)
     await callback.message.answer(
         f"Редактирование ({scope})\n"
         f"Текущая фраза: «{item.phrase}»\n\n"
@@ -215,11 +298,37 @@ async def edit_minus_start(callback: CallbackQuery, state: FSMContext, db_user: 
 
 @router.callback_query(F.data.startswith("minus:del:"))
 async def delete_minus(callback: CallbackQuery, db_user: User) -> None:
-    phrase_id = int(callback.data.split(":")[-1])
+    parts = callback.data.split(":")
+    phrase_id = int(parts[2])
+    scope_key = parts[3] if len(parts) > 3 else None
+    page = int(parts[4]) if len(parts) > 4 else 0
+    group_id = parse_minus_scope_key(scope_key) if scope_key else None
+
     async with async_session_factory() as session:
+        item = await repo.get_negative_phrase(session, phrase_id, db_user.telegram_id)
+        if item is None:
+            await callback.answer("Не найдено", show_alert=True)
+            return
+        if group_id is None and scope_key is None:
+            group_id = item.group_id
         ok = await repo.delete_negative_phrase(session, phrase_id, db_user.telegram_id)
-    if ok:
-        await callback.message.edit_text("Фраза удалена.")
+        if not ok:
+            await callback.answer("Не найдено", show_alert=True)
+            return
+
+    remaining = await _load_scope_phrases(db_user.telegram_id, group_id)
+    if callback.message is None:
+        await callback.answer("Удалено")
+        return
+    if remaining:
+        page = clamp_page(page, len(remaining))
+        await _send_minus_group_page(
+            callback.message,
+            remaining,
+            group_id=group_id,
+            page=page,
+            edit=True,
+        )
     else:
-        await callback.answer("Не найдено", show_alert=True)
-    await callback.answer()
+        await callback.message.edit_text("В этом разделе минус-фраз не осталось.")
+    await callback.answer("Удалено")

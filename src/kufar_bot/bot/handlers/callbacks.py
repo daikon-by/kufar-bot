@@ -7,10 +7,12 @@ from aiogram.types import CallbackQuery
 
 from kufar_bot.bot.keyboards import minus_confirm_keyboard, minus_suggest_keyboard
 from kufar_bot.bot.minus_listing import (
+    delete_message_safe,
     edit_listing_message,
     listing_message_snapshot,
     restore_listing_message,
 )
+from kufar_bot.bot.minus_scope import minus_scope_label
 from kufar_bot.bot.states import AddMinusFromListingStates
 from kufar_bot.db import repository as repo
 from kufar_bot.db.models import User
@@ -22,10 +24,6 @@ router = Router()
 log = structlog.get_logger(__name__)
 
 
-def _scope_label(group_id: int | None) -> str:
-    return "глобально" if group_id is None else f"для группы #{group_id}"
-
-
 async def _restore_listing_from_state(callback: CallbackQuery, state: FSMContext) -> bool:
     data = await state.get_data()
     listing_text = data.get("listing_text")
@@ -35,7 +33,7 @@ async def _restore_listing_from_state(callback: CallbackQuery, state: FSMContext
     group_id = data.get("listing_group_id")
     if not all([listing_text, message_id, chat_id, ad_id, group_id]):
         return False
-    return await restore_listing_message(
+    restored = await restore_listing_message(
         callback.bot,
         chat_id=chat_id,
         message_id=message_id,
@@ -43,6 +41,33 @@ async def _restore_listing_from_state(callback: CallbackQuery, state: FSMContext
         ad_id=int(ad_id),
         group_id=int(group_id),
     )
+    if restored:
+        await _cleanup_minus_ui_messages(callback, data, keep_message_id=message_id)
+    return restored
+
+
+async def _cleanup_minus_ui_messages(
+    callback: CallbackQuery,
+    data: dict,
+    *,
+    keep_message_id: int,
+) -> None:
+    chat_id = data.get("listing_chat_id")
+    if chat_id is None:
+        return
+    ui_message_id = data.get("minus_ui_message_id")
+    if ui_message_id and ui_message_id != keep_message_id:
+        await delete_message_safe(callback.bot, chat_id=chat_id, message_id=ui_message_id)
+    if (
+        callback.message is not None
+        and callback.message.message_id != keep_message_id
+        and callback.message.message_id != ui_message_id
+    ):
+        await delete_message_safe(
+            callback.bot,
+            chat_id=chat_id,
+            message_id=callback.message.message_id,
+        )
 
 
 async def _start_minus_from_listing(
@@ -76,7 +101,10 @@ async def _start_minus_from_listing(
         **listing_message_snapshot(callback.message),
     )
 
-    scope = _scope_label(group_id)
+    async with async_session_factory() as session:
+        scope = await minus_scope_label(
+            session, db_user.telegram_id, group_id, for_action=True
+        )
     hints = ", ".join(f"«{w}»" for w in suggestions) if suggestions else "—"
     prompt = (
         f"⛔ <b>Минус-фраза</b> ({scope})\n\n"
@@ -85,19 +113,61 @@ async def _start_minus_from_listing(
         f"Подсказки: {html.escape(hints)}\n\n"
         f"Или нажмите слово ниже, затем отредактируйте и сохраните."
     )
+    ui_message_id = callback.message.message_id
     edited = await edit_listing_message(
         callback.message,
         prompt,
         reply_markup=minus_suggest_keyboard(suggestions),
     )
     if not edited:
-        await callback.message.answer(
+        sent = await callback.message.answer(
             prompt,
             parse_mode="HTML",
             reply_markup=minus_suggest_keyboard(suggestions),
             reply_to_message_id=callback.message.message_id,
         )
+        ui_message_id = sent.message_id
+    await state.update_data(minus_ui_message_id=ui_message_id)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("fav:add:"))
+async def add_favorite(callback: CallbackQuery, db_user: User) -> None:
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+    ad_id = int(parts[2])
+
+    async with KufarClient() as client:
+        listing = await client.fetch_listing(ad_id)
+    if listing is None:
+        await callback.answer("Объявление недоступно", show_alert=True)
+        return
+
+    if listing.price_byn is not None:
+        price = listing.price_byn
+        currency = "BYN"
+    elif listing.price_usd is not None:
+        price = listing.price_usd
+        currency = "USD"
+    else:
+        price = None
+        currency = listing.currency or "BYN"
+
+    async with async_session_factory() as session:
+        fav = await repo.add_favorite(
+            session,
+            db_user.telegram_id,
+            ad_id,
+            listing.subject,
+            listing.url,
+            listing.display_photo_url,
+            price,
+            currency,
+        )
+
+    await callback.answer(f"⭐ В избранном: {fav.title[:40]}", show_alert=False)
 
 
 @router.callback_query(F.data.startswith("minus:global:"))
@@ -121,7 +191,7 @@ async def minus_from_listing_group(callback: CallbackQuery, state: FSMContext, d
 
 
 @router.callback_query(F.data.startswith("minus:hint:"))
-async def minus_pick_hint(callback: CallbackQuery, state: FSMContext) -> None:
+async def minus_pick_hint(callback: CallbackQuery, state: FSMContext, db_user: User) -> None:
     data = await state.get_data()
     if not data.get("suggestions"):
         await callback.answer("Сессия устарела, нажмите «В минус» снова", show_alert=True)
@@ -136,7 +206,10 @@ async def minus_pick_hint(callback: CallbackQuery, state: FSMContext) -> None:
     phrase = suggestions[idx]
     await state.update_data(draft_phrase=phrase)
     group_id = data.get("group_id")
-    scope = _scope_label(group_id)
+    async with async_session_factory() as session:
+        scope = await minus_scope_label(
+            session, db_user.telegram_id, group_id, for_action=True
+        )
 
     text = (
         f"Черновик ({scope}):\n<code>{html.escape(phrase)}</code>\n\n"
@@ -145,18 +218,21 @@ async def minus_pick_hint(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.message is None:
         await callback.answer()
         return
+    ui_message_id = callback.message.message_id
     edited = await edit_listing_message(
         callback.message,
         text,
         reply_markup=minus_confirm_keyboard(),
     )
     if not edited:
-        await callback.message.answer(
+        sent = await callback.message.answer(
             text,
             parse_mode="HTML",
             reply_markup=minus_confirm_keyboard(),
             reply_to_message_id=data.get("listing_message_id"),
         )
+        ui_message_id = sent.message_id
+    await state.update_data(minus_ui_message_id=ui_message_id)
     await callback.answer()
 
 
@@ -184,7 +260,7 @@ async def minus_save_draft(callback: CallbackQuery, state: FSMContext, db_user: 
             await callback.message.edit_text("Не удалось сохранить фразу.")
         await callback.answer("Не удалось сохранить", show_alert=True)
     else:
-        await callback.answer(f"Сохранено: «{item.phrase}»", show_alert=True)
+        await callback.answer()
 
 
 @router.callback_query(F.data == "minus:cancel")

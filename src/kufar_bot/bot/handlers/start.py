@@ -2,6 +2,7 @@ import asyncio
 
 import structlog
 from aiogram import F, Router
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 
@@ -53,29 +54,24 @@ async def open_schedule(message: Message) -> None:
     await message.answer("Настройка расписания опросов", reply_markup=schedule_menu())
 
 
-@router.message(F.text == "⭐ Избранное")
-async def list_favorites(message: Message, db_user: User) -> None:
-    async with async_session_factory() as session:
-        favorites = await repo.get_favorites(session, db_user.telegram_id, active_only=True)
-    if not favorites:
-        await message.answer("Избранное пусто. Нажмите «В избранное» под объявлением.")
-        return
-    lines = ["<b>Избранное:</b>"]
-    for fav in favorites[:30]:
-        price = f"{fav.last_price / 100:.2f} {fav.currency}" if fav.last_price else "—"
-        lines.append(f"• {fav.title} — {price}\n  {fav.url}")
-    await message.answer("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
-
-
 async def _run_manual_poll(bot, user_id: int, stop_message_id: int | None) -> None:
     from kufar_bot.services.poller import poll_user
+    from kufar_bot.services.telegram_retry import with_flood_retry
 
     try:
         async with async_session_factory() as session:
             await poll_user(session, bot, user_id, manual=True)
+    except TelegramRetryAfter:
+        log.warning("manual_poll_flood", user_id=user_id)
     except Exception:
         log.exception("manual_poll_failed", user_id=user_id)
-        await bot.send_message(user_id, "Ошибка опроса. Подробности: data/kufar_bot.log")
+        try:
+            await with_flood_retry(
+                "manual_poll_error",
+                lambda: bot.send_message(user_id, "Ошибка опроса. Подробности: data/kufar_bot.log"),
+            )
+        except Exception:
+            pass
     finally:
         poll_cancel.clear(user_id)
         if stop_message_id is not None:

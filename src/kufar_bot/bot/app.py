@@ -1,7 +1,7 @@
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from kufar_bot.bot.handlers import admin, callbacks, groups, minus, schedule, start
+from kufar_bot.bot.handlers import admin, callbacks, favorites, groups, minus, schedule, start
 from kufar_bot.bot.handlers.groups import nav_router as groups_nav_router
 from kufar_bot.bot.handlers.schedule import nav_router as schedule_nav_router
 from kufar_bot.bot.middlewares import AuthMiddleware
@@ -20,6 +20,7 @@ def create_dispatcher() -> Dispatcher:
     dp.include_router(admin.router)
     dp.include_router(groups.router)
     dp.include_router(minus.router)
+    dp.include_router(favorites.router)
     dp.include_router(schedule.router)
     dp.include_router(callbacks.router)
     return dp

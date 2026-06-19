@@ -15,13 +15,12 @@ class Settings(BaseSettings):
     kufar_description_max_chars: int = 600
     kufar_request_delay_sec: float = 0.4
     kufar_use_thumbnail: bool = True
-    kufar_send_photo_separate: bool = True
     poll_max_pages: int = 3
     poll_watermark_max_pages: int = 100
     poll_first_run_hours: int = 24
-    poll_digest_threshold: int = 100
+    poll_digest_threshold: int = 250
     poll_max_send_per_run: int = 0
-    telegram_send_delay_sec: float = 0.35
+    telegram_send_delay_sec: float = 1.0
 
     @field_validator("admin_ids", mode="before")
     @classmethod

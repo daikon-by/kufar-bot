@@ -65,6 +65,34 @@ def group_actions(group_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def group_urls_keyboard(group_id: int, urls) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for idx, item in enumerate(urls, start=1):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{idx}. 🔄 Сброс",
+                    callback_data=f"group:url:reset:{item.id}:{group_id}",
+                ),
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=f"group:url:del:{item.id}:{group_id}",
+                ),
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="➕ Ссылка", callback_data=f"group:url:add:{group_id}")])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🔄 Сбросить опрос (вся группа)",
+                callback_data=f"group:reset_poll:{group_id}",
+            ),
+        ]
+    )
+    rows.append([InlineKeyboardButton(text="🗑 Удалить группу", callback_data=f"group:del:{group_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def group_url_actions(url_id: int, group_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

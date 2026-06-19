@@ -183,9 +183,10 @@ class KufarClient:
                     anchor_found = True
                     stop = True
                     break
-                if watermark_ad_id is None and since and listing.list_time <= since:
-                    stop = True
-                    break
+                if since and listing.list_time <= since:
+                    if watermark_ad_id is None or not anchor_found:
+                        stop = True
+                        break
                 listings.append(listing)
 
             if stop:
@@ -202,13 +203,22 @@ class KufarClient:
                 break
             cursor = next_cursor
 
+        deduped: list[AdListing] = []
+        seen_ids: set[int] = set()
+        for listing in listings:
+            if listing.ad_id in seen_ids:
+                continue
+            seen_ids.add(listing.ad_id)
+            deduped.append(listing)
+
         log.info(
             "kufar_watermark_done",
-            fetched=len(listings),
+            fetched=len(deduped),
+            raw_fetched=len(listings),
             watermark=watermark_ad_id,
             anchor_found=anchor_found,
         )
-        return listings, anchor_found
+        return deduped, anchor_found
 
     async def fetch_top_ad_id(self, api_query: dict[str, str] | str) -> int | None:
         listings = await self.search_listings(api_query, max_pages=1)
@@ -230,9 +240,16 @@ class KufarClient:
         return listing
 
     async def enrich_with_description(self, listing: AdListing) -> AdListing:
-        if listing.body:
+        need_body = settings.kufar_fetch_description and not listing.body
+        need_photos = len(listing.photo_urls) <= 1
+        if not need_body and not need_photos:
             return listing
         full = await self.fetch_listing(listing.ad_id)
-        if full and full.body:
-            return listing.with_body(full.body)
-        return listing
+        if full is None:
+            return listing
+        result = listing
+        if need_body and full.body:
+            result = result.with_body(full.body)
+        if need_photos and len(full.photo_urls) > len(result.photo_urls):
+            result = result.with_photos(full.photo_urls)
+        return result

@@ -19,6 +19,16 @@ def is_kufar_url(url: str) -> bool:
     return parsed.netloc.lower() in KUFAR_HOSTS and parsed.path.startswith("/l/")
 
 
+def short_kufar_list_url(url: str, *, max_len: int = 72) -> str:
+    """Короткая подпись для ссылки поиска в списках бота."""
+    parsed = urlparse(url.strip())
+    path = parsed.path.removeprefix("/l/") or parsed.path
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    if len(path) > max_len:
+        return path[: max_len - 1] + "…"
+    return path
+
 def _extract_next_data(html: str) -> dict[str, Any] | None:
     match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
     if not match:
@@ -107,12 +117,14 @@ def parse_listing(raw: dict[str, Any]) -> AdListing:
         list_time = datetime.now(UTC)
 
     images = raw.get("images") or []
-    photo_url = None
+    photo_urls: list[str] = []
+    for item in images:
+        if isinstance(item, dict) and item.get("path"):
+            photo_urls.append(IMAGE_GALLERY_BASE + item["path"])
+    photo_url = photo_urls[0] if photo_urls else None
     thumb_url = None
     if images and isinstance(images[0], dict) and images[0].get("path"):
-        path = images[0]["path"]
-        photo_url = IMAGE_GALLERY_BASE + path
-        thumb_url = IMAGE_THUMB_BASE + path
+        thumb_url = IMAGE_THUMB_BASE + images[0]["path"]
 
     price_byn = raw.get("price_byn")
     price_usd = raw.get("price_usd")
@@ -132,6 +144,7 @@ def parse_listing(raw: dict[str, Any]) -> AdListing:
         body=raw.get("body") or raw.get("body_short"),
         photo_url=photo_url,
         thumb_url=thumb_url,
+        photo_urls=photo_urls,
         area_label=_ad_param_value(raw, "area"),
         region_label=_ad_param_value(raw, "region"),
     )

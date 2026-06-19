@@ -53,3 +53,19 @@ def test_parse_listing_price():
     assert listing.photo_url.endswith("test.jpg")
     assert listing.thumb_url is not None
     assert "list_thumbs" in listing.thumb_url
+
+
+def test_parse_listing_all_photos():
+    raw = {
+        "ad_id": 2,
+        "subject": "Галерея",
+        "ad_link": "https://www.kufar.by/item/2",
+        "price_byn": 10000,
+        "currency": "BYN",
+        "list_time": "2026-06-18T10:00:00Z",
+        "images": [{"path": "a.jpg"}, {"path": "b.jpg"}, {"path": "c.jpg"}],
+    }
+    listing = parse_listing(raw)
+    assert len(listing.photo_urls) == 3
+    assert listing.display_photo_urls == listing.photo_urls
+    assert all(url.startswith("https://rms.kufar.by/v1/gallery/") for url in listing.photo_urls)

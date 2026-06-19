@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -103,6 +104,15 @@ async def get_user_groups(session: AsyncSession, user_id: int) -> list[SearchGro
     return list(result)
 
 
+async def get_group_by_name(session: AsyncSession, user_id: int, name: str) -> SearchGroup | None:
+    return await session.scalar(
+        select(SearchGroup)
+        .where(SearchGroup.user_id == user_id, SearchGroup.name == name)
+        .options(selectinload(SearchGroup.urls))
+        .limit(1)
+    )
+
+
 async def get_group(session: AsyncSession, group_id: int, user_id: int) -> SearchGroup | None:
     result = await session.scalar(
         select(SearchGroup)
@@ -116,8 +126,9 @@ async def create_group(
     session: AsyncSession,
     user_id: int,
     name: str,
-    section_label: str,
     region_label: str,
+    *,
+    section_label: str = "",
 ) -> SearchGroup:
     group = SearchGroup(
         user_id=user_id,
@@ -127,12 +138,35 @@ async def create_group(
     )
     session.add(group)
     await session.commit()
-    await session.refresh(group)
-    return group
+    loaded = await get_group(session, group.id, user_id)
+    if loaded is None:
+        raise RuntimeError(f"Failed to load created group id={group.id}")
+    return loaded
 
 
-async def add_group_url(session: AsyncSession, group_id: int, url: str, api_query: str) -> SearchUrl:
-    item = SearchUrl(group_id=group_id, url=url, api_query=api_query)
+async def add_group_url(
+    session: AsyncSession,
+    group_id: int,
+    url: str,
+    api_query: str,
+    *,
+    section_label: str = "",
+) -> SearchUrl | None:
+    existing = await session.scalar(
+        select(SearchUrl).where(SearchUrl.group_id == group_id, SearchUrl.url == url)
+    )
+    if existing is not None:
+        if section_label and not (existing.section_label or "").strip():
+            existing.section_label = section_label.strip()
+            await session.commit()
+            await session.refresh(existing)
+        return existing
+    item = SearchUrl(
+        group_id=group_id,
+        url=url,
+        api_query=api_query,
+        section_label=section_label.strip(),
+    )
     session.add(item)
     await session.commit()
     await session.refresh(item)
@@ -223,7 +257,9 @@ async def delete_negative_phrase(session: AsyncSession, phrase_id: int, user_id:
 
 async def get_negative_phrase(session: AsyncSession, phrase_id: int, user_id: int) -> NegativePhrase | None:
     return await session.scalar(
-        select(NegativePhrase).where(NegativePhrase.id == phrase_id, NegativePhrase.user_id == user_id)
+        select(NegativePhrase)
+        .options(selectinload(NegativePhrase.group))
+        .where(NegativePhrase.id == phrase_id, NegativePhrase.user_id == user_id)
     )
 
 
@@ -335,7 +371,11 @@ async def load_seen_ad_ids(
     result = await session.scalars(
         select(SeenListing.ad_id).where(
             SeenListing.user_id == user_id,
-            SeenListing.search_url_id == search_url_id,
+            (SeenListing.search_url_id == search_url_id)
+            | (
+                SeenListing.search_url_id.is_(None)
+                & (SeenListing.group_id == group_id)
+            ),
         )
     )
     return set(result)
@@ -354,7 +394,13 @@ async def reset_search_url_poll_state(session: AsyncSession, search_url_id: int,
     await session.execute(
         delete(SeenListing).where(
             SeenListing.user_id == user_id,
-            SeenListing.search_url_id == search_url_id,
+            (
+                (SeenListing.search_url_id == search_url_id)
+                | (
+                    SeenListing.search_url_id.is_(None)
+                    & (SeenListing.group_id == item.group_id)
+                )
+            ),
         )
     )
     await session.commit()
@@ -375,10 +421,43 @@ async def reset_group_poll_state(session: AsyncSession, group_id: int, user_id: 
         await session.execute(
             delete(SeenListing).where(
                 SeenListing.user_id == user_id,
-                SeenListing.search_url_id.in_(url_ids),
+                (
+                    SeenListing.search_url_id.in_(url_ids)
+                    | (
+                        SeenListing.search_url_id.is_(None)
+                        & (SeenListing.group_id == group_id)
+                    )
+                ),
             )
         )
     await session.commit()
+    return count
+
+
+async def reset_section_poll_state(
+    session: AsyncSession,
+    group_id: int,
+    user_id: int,
+    section_label: str,
+) -> int:
+    group = await get_group(session, group_id, user_id)
+    if group is None:
+        return 0
+    count = 0
+    for item in group.urls:
+        if (item.section_label or "").strip() != section_label.strip():
+            continue
+        item.watermark_ad_id = None
+        item.last_polled_at = None
+        await session.execute(
+            delete(SeenListing).where(
+                SeenListing.user_id == user_id,
+                SeenListing.search_url_id == item.id,
+            )
+        )
+        count += 1
+    if count:
+        await session.commit()
     return count
 
 
@@ -409,8 +488,14 @@ async def mark_listing_seen(
     )
     if seen_cache is not None:
         seen_cache.add(ad_id)
-    if commit:
+    if not commit:
+        return
+    try:
         await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if seen_cache is not None:
+            seen_cache.add(ad_id)
 
 
 async def mark_listings_seen_batch(
@@ -426,19 +511,28 @@ async def mark_listings_seen_batch(
     if not new_ids:
         return
     now = datetime.now(UTC)
-    for ad_id in new_ids:
-        session.add(
-            SeenListing(
-                user_id=user_id,
-                ad_id=ad_id,
-                group_id=group_id,
-                search_url_id=search_url_id,
-                notified_at=now,
+    chunk_size = 250
+    for offset in range(0, len(new_ids), chunk_size):
+        chunk = new_ids[offset : offset + chunk_size]
+        for ad_id in chunk:
+            session.add(
+                SeenListing(
+                    user_id=user_id,
+                    ad_id=ad_id,
+                    group_id=group_id,
+                    search_url_id=search_url_id,
+                    notified_at=now,
+                )
             )
-        )
-        if seen_cache is not None:
-            seen_cache.add(ad_id)
-    await session.commit()
+            if seen_cache is not None:
+                seen_cache.add(ad_id)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            for ad_id in chunk:
+                if seen_cache is not None:
+                    seen_cache.add(ad_id)
 
 
 async def update_search_url_watermark(
